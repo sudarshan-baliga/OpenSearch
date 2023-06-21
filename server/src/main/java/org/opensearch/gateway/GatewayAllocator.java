@@ -90,19 +90,19 @@ public class GatewayAllocator implements ExistingShardsAllocator {
         ConcurrentCollections.newConcurrentMap();
 
 
-    private Map<DiscoveryNode, TransportNodesCollectGatewayStartedShard.ListOfNodeGatewayStartedShards> shardsPerNode= ConcurrentCollections.newConcurrentMap();
+    private Map<DiscoveryNode, TransportNodesBulkListGatewayStartedShards.BulkOfNodeGatewayStartedShards> shardsPerNode= ConcurrentCollections.newConcurrentMap();
 
-    private AsyncShardsFetchPerNode<TransportNodesCollectGatewayStartedShard.ListOfNodeGatewayStartedShards> fetchShardsFromNodes=null;
+    private AsyncShardsFetchPerNode<TransportNodesBulkListGatewayStartedShards.BulkOfNodeGatewayStartedShards> fetchShardsFromNodes=null;
 
     private Set<String> lastSeenEphemeralIds = Collections.emptySet();
-    TransportNodesCollectGatewayStartedShard testAction;
+    TransportNodesBulkListGatewayStartedShards testAction;
 
     @Inject
     public GatewayAllocator(
         RerouteService rerouteService,
         TransportNodesListGatewayStartedShards startedAction,
         TransportNodesListShardStoreMetadata storeAction,
-        TransportNodesCollectGatewayStartedShard testAction
+        TransportNodesBulkListGatewayStartedShards testAction
     ) {
         this.rerouteService = rerouteService;
         this.primaryShardAllocator = new TestInternalPrimaryShardAllocator(testAction);
@@ -199,7 +199,7 @@ public class GatewayAllocator implements ExistingShardsAllocator {
         innerAllocatedUnassigned(allocation, primaryShardAllocator, replicaShardAllocator, shardRouting, unassignedAllocationHandler);
     }
 
-    private synchronized Map<DiscoveryNode, TransportNodesCollectGatewayStartedShard.ListOfNodeGatewayStartedShards> collectShardsPerNode(RoutingAllocation allocation) {
+    private synchronized Map<DiscoveryNode, TransportNodesBulkListGatewayStartedShards.BulkOfNodeGatewayStartedShards> collectShardsPerNode(RoutingAllocation allocation) {
 
         Map<ShardId, String> batchOfUnassignedShardsWithCustomDataPath = getBatchOfUnassignedShardsWithCustomDataPath(allocation);
         if (fetchShardsFromNodes == null) {
@@ -220,7 +220,7 @@ public class GatewayAllocator implements ExistingShardsAllocator {
             }
         }
 
-        AsyncShardsFetchPerNode.TestFetchResult<TransportNodesCollectGatewayStartedShard.ListOfNodeGatewayStartedShards> listOfNodeGatewayStartedShardsTestFetchResult = fetchShardsFromNodes.testFetchData(allocation.nodes());
+        AsyncShardsFetchPerNode.TestFetchResult<TransportNodesBulkListGatewayStartedShards.BulkOfNodeGatewayStartedShards> listOfNodeGatewayStartedShardsTestFetchResult = fetchShardsFromNodes.testFetchData(allocation.nodes());
 
         if (listOfNodeGatewayStartedShardsTestFetchResult.getNodesToShards()==null)
         {
@@ -412,17 +412,17 @@ public class GatewayAllocator implements ExistingShardsAllocator {
     }
 
     class TestInternalPrimaryShardAllocator extends PrimaryShardAllocator {
-        private TransportNodesCollectGatewayStartedShard transportNodesCollectGatewayStartedShardAction;
+        private TransportNodesBulkListGatewayStartedShards transportNodesBulkListGatewayStartedShardsAction;
 
-        public TestInternalPrimaryShardAllocator(TransportNodesCollectGatewayStartedShard transportNodesCollectGatewayStartedShard) {
-            this.transportNodesCollectGatewayStartedShardAction = transportNodesCollectGatewayStartedShard;
+        public TestInternalPrimaryShardAllocator(TransportNodesBulkListGatewayStartedShards transportNodesBulkListGatewayStartedShards) {
+            this.transportNodesBulkListGatewayStartedShardsAction = transportNodesBulkListGatewayStartedShards;
         }
 
         @Override
         // send the current view that gateway allocator has
         protected AsyncShardFetch.FetchResult<TransportNodesListGatewayStartedShards.NodeGatewayStartedShards> fetchData(ShardRouting shard, RoutingAllocation allocation) {
             ShardId shardId = shard.shardId();
-            Map<DiscoveryNode, TransportNodesCollectGatewayStartedShard.ListOfNodeGatewayStartedShards> discoveryNodeListOfNodeGatewayStartedShardsMap = shardsPerNode;
+            Map<DiscoveryNode, TransportNodesBulkListGatewayStartedShards.BulkOfNodeGatewayStartedShards> discoveryNodeListOfNodeGatewayStartedShardsMap = shardsPerNode;
 
             if (shardsPerNode.isEmpty()) {
                 return new AsyncShardFetch.FetchResult<>(shardId, null, Collections.emptySet());
@@ -431,9 +431,9 @@ public class GatewayAllocator implements ExistingShardsAllocator {
             HashMap<DiscoveryNode, TransportNodesListGatewayStartedShards.NodeGatewayStartedShards> dataToAdapt = new HashMap<>();
             for (DiscoveryNode node : discoveryNodeListOfNodeGatewayStartedShardsMap.keySet()) {
 
-                TransportNodesCollectGatewayStartedShard.ListOfNodeGatewayStartedShards shardsOnThatNode = discoveryNodeListOfNodeGatewayStartedShardsMap.get(node);
-                if (shardsOnThatNode.getListOfNodeGatewayStartedShards().containsKey(shardId)) {
-                    TransportNodesCollectGatewayStartedShard.NodeGatewayStartedShards nodeGatewayStartedShardsFromAdapt = shardsOnThatNode.getListOfNodeGatewayStartedShards().get(shardId);
+                TransportNodesBulkListGatewayStartedShards.BulkOfNodeGatewayStartedShards shardsOnThatNode = discoveryNodeListOfNodeGatewayStartedShardsMap.get(node);
+                if (shardsOnThatNode.getBulkOfNodeGatewayStartedShards().containsKey(shardId)) {
+                    TransportNodesBulkListGatewayStartedShards.NodeGatewayStartedShards nodeGatewayStartedShardsFromAdapt = shardsOnThatNode.getBulkOfNodeGatewayStartedShards().get(shardId);
                     // construct a object to adapt
                     TransportNodesListGatewayStartedShards.NodeGatewayStartedShards nodeGatewayStartedShardsToAdapt = new TransportNodesListGatewayStartedShards.NodeGatewayStartedShards(node, nodeGatewayStartedShardsFromAdapt.allocationId(),
                         nodeGatewayStartedShardsFromAdapt.primary(), nodeGatewayStartedShardsFromAdapt.replicationCheckpoint(), nodeGatewayStartedShardsFromAdapt.storeException());

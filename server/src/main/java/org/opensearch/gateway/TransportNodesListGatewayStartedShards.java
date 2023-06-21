@@ -32,7 +32,6 @@
 
 package org.opensearch.gateway;
 
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.opensearch.LegacyESVersion;
 import org.opensearch.OpenSearchException;
 import org.opensearch.Version;
@@ -46,7 +45,6 @@ import org.opensearch.action.support.nodes.BaseNodesRequest;
 import org.opensearch.action.support.nodes.BaseNodesResponse;
 import org.opensearch.action.support.nodes.TransportNodesAction;
 import org.opensearch.cluster.ClusterName;
-import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.Nullable;
@@ -56,12 +54,9 @@ import org.opensearch.common.io.stream.StreamOutput;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.xcontent.NamedXContentRegistry;
 import org.opensearch.env.NodeEnvironment;
-import org.opensearch.index.IndexSettings;
 import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.shard.ShardId;
-import org.opensearch.index.shard.ShardPath;
 import org.opensearch.index.shard.ShardStateMetadata;
-import org.opensearch.index.store.Store;
 import org.opensearch.indices.IndicesService;
 import org.opensearch.indices.replication.checkpoint.ReplicationCheckpoint;
 import org.opensearch.threadpool.ThreadPool;
@@ -160,39 +155,22 @@ public class TransportNodesListGatewayStartedShards extends TransportNodesAction
             );
             if (shardStateMetadata != null) {
                 if (indicesService.getShardOrNull(shardId) == null) {
-                    final String customDataPath;
-                    if (request.getCustomDataPath() != null) {
-                        customDataPath = request.getCustomDataPath();
-                    } else {
-                        // TODO: Fallback for BWC with older OpenSearch versions.
-                        // Remove once request.getCustomDataPath() always returns non-null
-                        final IndexMetadata metadata = clusterService.state().metadata().index(shardId.getIndex());
-                        if (metadata != null) {
-                            customDataPath = new IndexSettings(metadata, settings).customDataPath();
-                        } else {
-                            logger.trace("{} node doesn't have meta data for the requests index", shardId);
-                            throw new OpenSearchException("node doesn't have meta data for index " + shardId.getIndex());
-                        }
-                    }
+                    final String customDataPath = TransportNodesGatewayStartedShardHelper.getCustomDataPathForShard(
+                        logger,
+                        shardId,
+                        request.getCustomDataPath(),
+                        settings,
+                        clusterService
+                    );
                     // we don't have an open shard on the store, validate the files on disk are openable
-                    ShardPath shardPath = null;
-                    try {
-                        shardPath = ShardPath.loadShardPath(logger, nodeEnv, shardId, customDataPath);
-                        if (shardPath == null) {
-                            throw new IllegalStateException(shardId + " no shard path found");
-                        }
-                        Store.tryOpenIndex(shardPath.resolveIndex(), shardId, nodeEnv::shardLock, logger);
-                    } catch (Exception exception) {
-                        final ShardPath finalShardPath = shardPath;
-                        logger.trace(
-                            () -> new ParameterizedMessage(
-                                "{} can't open index for shard [{}] in path [{}]",
-                                shardId,
-                                shardStateMetadata,
-                                (finalShardPath != null) ? finalShardPath.resolveIndex() : ""
-                            ),
-                            exception
-                        );
+                    Exception exception = TransportNodesGatewayStartedShardHelper.getShardCorruption(
+                        logger,
+                        nodeEnv,
+                        shardId,
+                        shardStateMetadata,
+                        customDataPath
+                    );
+                    if (exception != null) {
                         String allocationId = shardStateMetadata.allocationId != null ? shardStateMetadata.allocationId.getId() : null;
                         return new NodeGatewayStartedShards(
                             clusterService.localNode(),
@@ -203,7 +181,6 @@ public class TransportNodesListGatewayStartedShards extends TransportNodesAction
                         );
                     }
                 }
-
                 logger.debug("{} shard state info found: [{}]", shardId, shardStateMetadata);
                 String allocationId = shardStateMetadata.allocationId != null ? shardStateMetadata.allocationId.getId() : null;
                 final IndexShard shard = indicesService.getShardOrNull(shardId);
@@ -421,23 +398,13 @@ public class TransportNodesListGatewayStartedShards extends TransportNodesAction
 
         @Override
         public void writeTo(StreamOutput out) throws IOException {
-            super.writeTo(out);
-            out.writeOptionalString(allocationId);
-            out.writeBoolean(primary);
-            if (storeException != null) {
-                out.writeBoolean(true);
-                out.writeException(storeException);
-            } else {
-                out.writeBoolean(false);
-            }
-            if (out.getVersion().onOrAfter(Version.V_2_3_0)) {
-                if (replicationCheckpoint != null) {
-                    out.writeBoolean(true);
-                    replicationCheckpoint.writeTo(out);
-                } else {
-                    out.writeBoolean(false);
-                }
-            }
+            TransportNodesGatewayStartedShardHelper.NodeGatewayStartedShardsWriteTo(
+                out,
+                allocationId,
+                primary,
+                storeException,
+                replicationCheckpoint
+            );
         }
 
         @Override
@@ -459,25 +426,22 @@ public class TransportNodesListGatewayStartedShards extends TransportNodesAction
 
         @Override
         public int hashCode() {
-            int result = (allocationId != null ? allocationId.hashCode() : 0);
-            result = 31 * result + (primary ? 1 : 0);
-            result = 31 * result + (storeException != null ? storeException.hashCode() : 0);
-            result = 31 * result + (replicationCheckpoint != null ? replicationCheckpoint.hashCode() : 0);
-            return result;
+            return TransportNodesGatewayStartedShardHelper.NodeGatewayStartedShardsHashCode(
+                allocationId,
+                primary,
+                storeException,
+                replicationCheckpoint
+            );
         }
 
         @Override
         public String toString() {
-            StringBuilder buf = new StringBuilder();
-            buf.append("NodeGatewayStartedShards[").append("allocationId=").append(allocationId).append(",primary=").append(primary);
-            if (storeException != null) {
-                buf.append(",storeException=").append(storeException);
-            }
-            if (replicationCheckpoint != null) {
-                buf.append(",ReplicationCheckpoint=").append(replicationCheckpoint.toString());
-            }
-            buf.append("]");
-            return buf.toString();
+            return TransportNodesGatewayStartedShardHelper.NodeGatewayStartedShardsToString(
+                allocationId,
+                primary,
+                storeException,
+                replicationCheckpoint
+            );
         }
     }
 }
